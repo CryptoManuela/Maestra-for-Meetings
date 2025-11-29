@@ -57,7 +57,9 @@ def process_meeting(
     language: str = None,
     skip_summary: bool = False,
     summary_only: bool = False,
-    transcript_path: str = None
+    transcript_path: str = None,
+    model: str = "gpt-4o-transcribe",
+    prompt: str = None
 ) -> dict:
     """
     Verarbeitet eine Meeting-Aufnahme.
@@ -69,6 +71,8 @@ def process_meeting(
         skip_summary: Überspringe Zusammenfassung
         summary_only: Nur Zusammenfassung (erfordert transcript_path)
         transcript_path: Pfad zu existierender Transkription
+        model: OpenAI Transkriptions-Modell
+        prompt: Basis-Prompt für Kontext (Fachbegriffe, Namen etc.)
 
     Returns:
         Dict mit transcript und summary
@@ -85,10 +89,14 @@ def process_meeting(
             result['transcript'] = f.read()
     else:
         # Transkription erstellen
-        print("\n🎙️  SCHRITT 1: Transkription mit OpenAI Whisper")
+        print("\n🎙️  SCHRITT 1: Transkription mit OpenAI")
         print("=" * 50)
 
-        transcriber = WhisperTranscriber(language=language)
+        transcriber = WhisperTranscriber(
+            language=language,
+            model=model,
+            base_prompt=prompt
+        )
         transcription_result = transcriber.transcribe(audio_path)
         result['transcript'] = transcription_result.text
 
@@ -163,6 +171,12 @@ Beispiele:
   python main.py meeting.mp3 -o protokoll.md    # Mit Output-Datei
   python main.py meeting.mp3 --language de      # Sprache angeben
   python main.py --info meeting.mp3             # Nur Datei-Info anzeigen
+
+  # Mit Kontext-Prompt für bessere Erkennung:
+  python main.py meeting.mp3 --prompt "Meeting über KI-Projekt mit Max, Lisa und Dr. Schmidt"
+
+  # Mit anderem Modell:
+  python main.py meeting.mp3 --model gpt-4o-mini-transcribe   # Schneller/günstiger
         """
     )
 
@@ -218,6 +232,18 @@ Beispiele:
         help='Generiere Follow-up E-Mail aus Transkription'
     )
 
+    parser.add_argument(
+        '-m', '--model',
+        choices=['gpt-4o-transcribe', 'gpt-4o-mini-transcribe', 'whisper-1'],
+        default='gpt-4o-transcribe',
+        help='OpenAI Transkriptions-Modell (Standard: gpt-4o-transcribe)'
+    )
+
+    parser.add_argument(
+        '-p', '--prompt',
+        help='Kontext-Prompt für bessere Erkennung (z.B. Teilnehmernamen, Fachbegriffe)'
+    )
+
     args = parser.parse_args()
 
     # Wenn keine Audio-Datei angegeben
@@ -263,7 +289,9 @@ Beispiele:
             output_path=args.output,
             language=args.language,
             summary_only=True,
-            transcript_path=args.transcript
+            transcript_path=args.transcript,
+            model=args.model,
+            prompt=args.prompt
         )
     else:
         # Normale Verarbeitung
@@ -271,7 +299,9 @@ Beispiele:
             audio_path=args.audio_file,
             output_path=args.output,
             language=args.language,
-            skip_summary=args.no_summary
+            skip_summary=args.no_summary,
+            model=args.model,
+            prompt=args.prompt
         )
 
     # Spezielle Ausgaben

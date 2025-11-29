@@ -1,18 +1,27 @@
 """
-Transcriber - OpenAI Whisper Integration für Transkription.
+Transcriber - OpenAI Whisper/GPT-4o Integration für Transkription.
 
-Transkribiert Audio-Dateien mit OpenAI's Whisper API und fügt
+Transkribiert Audio-Dateien mit OpenAI's Transcription API und fügt
 die Ergebnisse von gechunkten Dateien intelligent zusammen.
+
+Unterstützt:
+- gpt-4o-transcribe (empfohlen, beste Qualität)
+- gpt-4o-mini-transcribe (schneller, günstiger)
+- whisper-1 (Legacy)
 """
 
 import os
 from pathlib import Path
-from typing import List, Optional, Generator
+from typing import List, Optional
 from dataclasses import dataclass
 from openai import OpenAI
 from tqdm import tqdm
 
 from .audio_chunker import AudioChunker
+
+
+# Anzahl der letzten Wörter für Kontext-Prompt (whisper-1 nutzt max 224 Tokens)
+CONTEXT_WORDS_LIMIT = 200
 
 
 @dataclass
@@ -37,7 +46,14 @@ class TranscriptionResult:
 
 
 class WhisperTranscriber:
-    """Transkribiert Audio mit OpenAI Whisper."""
+    """Transkribiert Audio mit OpenAI's Transcription API."""
+
+    # Verfügbare Modelle
+    MODELS = {
+        'gpt-4o-transcribe': 'Beste Qualität, unterstützt Prompting',
+        'gpt-4o-mini-transcribe': 'Schneller und günstiger',
+        'whisper-1': 'Legacy Modell'
+    }
 
     SUPPORTED_LANGUAGES = [
         'de', 'en', 'es', 'fr', 'it', 'pt', 'nl', 'pl', 'ru', 'ja', 'zh', 'ko'
@@ -46,18 +62,20 @@ class WhisperTranscriber:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "whisper-1",
+        model: str = "gpt-4o-transcribe",
         language: Optional[str] = None,
-        response_format: str = "text"
+        response_format: str = "text",
+        base_prompt: Optional[str] = None
     ):
         """
         Initialisiert den Transcriber.
 
         Args:
             api_key: OpenAI API Key (oder aus OPENAI_API_KEY Umgebungsvariable)
-            model: Whisper Modell (derzeit nur "whisper-1")
+            model: Transkriptions-Modell (gpt-4o-transcribe, gpt-4o-mini-transcribe, whisper-1)
             language: Sprache des Audios (optional, wird sonst erkannt)
             response_format: Format der Antwort (text, json, srt, vtt)
+            base_prompt: Basis-Prompt für Kontext (z.B. Fachbegriffe, Namen)
         """
         self.api_key = api_key or os.getenv('OPENAI_API_KEY')
         if not self.api_key:
@@ -70,19 +88,57 @@ class WhisperTranscriber:
         self.model = model
         self.language = language
         self.response_format = response_format
+        self.base_prompt = base_prompt
 
-    def transcribe_file(self, file_path: str) -> str:
+    def _build_prompt(self, previous_transcript: Optional[str] = None) -> Optional[str]:
+        """
+        Baut den Prompt für die Transkription.
+
+        Kombiniert den Basis-Prompt mit dem Kontext des vorherigen Chunks.
+        Das verbessert die Genauigkeit bei Chunk-Übergängen erheblich.
+
+        Args:
+            previous_transcript: Text des vorherigen Chunks für Kontext
+
+        Returns:
+            Kombinierter Prompt oder None
+        """
+        parts = []
+
+        # Basis-Prompt (z.B. Fachbegriffe, Teilnehmernamen)
+        if self.base_prompt:
+            parts.append(self.base_prompt)
+
+        # Kontext vom vorherigen Chunk
+        # OpenAI Doku: "prompt the model with the transcript of the preceding segment"
+        if previous_transcript:
+            # Nur die letzten N Wörter verwenden (whisper-1 nutzt max 224 Tokens)
+            words = previous_transcript.split()
+            if len(words) > CONTEXT_WORDS_LIMIT:
+                context = ' '.join(words[-CONTEXT_WORDS_LIMIT:])
+            else:
+                context = previous_transcript
+            parts.append(context)
+
+        if parts:
+            return ' '.join(parts)
+        return None
+
+    def transcribe_file(
+        self,
+        file_path: str,
+        prompt: Optional[str] = None
+    ) -> str:
         """
         Transkribiert eine einzelne Audio-Datei.
 
         Args:
             file_path: Pfad zur Audio-Datei
+            prompt: Optionaler Prompt für Kontext
 
         Returns:
             Transkribierter Text
         """
-        path = Path(file_path)
-
         with open(file_path, 'rb') as audio_file:
             kwargs = {
                 'model': self.model,
@@ -92,6 +148,11 @@ class WhisperTranscriber:
 
             if self.language:
                 kwargs['language'] = self.language
+
+            # Prompt nur hinzufügen wenn vorhanden
+            # (gpt-4o-transcribe und whisper-1 unterstützen Prompts)
+            if prompt:
+                kwargs['prompt'] = prompt
 
             response = self.client.audio.transcriptions.create(**kwargs)
 
@@ -109,7 +170,11 @@ class WhisperTranscriber:
         progress: bool = True
     ) -> TranscriptionResult:
         """
-        Transkribiert mehrere Audio-Chunks und fügt sie zusammen.
+        Transkribiert mehrere Audio-Chunks mit Kontext-Verkettung.
+
+        Verwendet die Transkription des vorherigen Chunks als Prompt
+        für den nächsten Chunk. Das verbessert die Genauigkeit an
+        Chunk-Grenzen erheblich (OpenAI Best Practice).
 
         Args:
             chunk_paths: Liste von Pfaden zu Audio-Chunks
@@ -119,6 +184,7 @@ class WhisperTranscriber:
             TranscriptionResult mit zusammengeführtem Text
         """
         segments = []
+        previous_text = None
 
         iterator = enumerate(chunk_paths)
         if progress:
@@ -129,12 +195,21 @@ class WhisperTranscriber:
             )
 
         for i, chunk_path in iterator:
-            text = self.transcribe_file(chunk_path)
+            # Baue Prompt mit Kontext vom vorherigen Chunk
+            prompt = self._build_prompt(previous_text)
+
+            # Transkribiere mit Kontext
+            text = self.transcribe_file(chunk_path, prompt=prompt)
+            text = text.strip()
+
             segment = TranscriptionSegment(
-                text=text.strip(),
+                text=text,
                 chunk_index=i
             )
             segments.append(segment)
+
+            # Speichere für nächsten Chunk als Kontext
+            previous_text = text
 
         # Füge Segmente zusammen und entferne Duplikate an Übergängen
         merged_text = self._merge_segments(segments)
@@ -238,10 +313,13 @@ class WhisperTranscriber:
         """
         chunker = AudioChunker(max_chunk_size_mb=max_chunk_size_mb)
 
+        print(f"Verwende Modell: {self.model}")
+
         # Prüfe ob Chunking nötig ist
         if not chunker.needs_chunking(file_path):
             print("Datei ist klein genug für direkten Upload.")
-            text = self.transcribe_file(file_path)
+            prompt = self._build_prompt()
+            text = self.transcribe_file(file_path, prompt=prompt)
             return TranscriptionResult(
                 text=text,
                 segments=[TranscriptionSegment(text=text, chunk_index=0)],
@@ -254,6 +332,7 @@ class WhisperTranscriber:
         with chunker:
             chunk_paths = list(chunker.chunk_audio(file_path, progress=progress))
             print(f"\nStarte Transkription von {len(chunk_paths)} Chunks...")
+            print("(Verwende Kontext-Verkettung für bessere Übergänge)")
             result = self.transcribe_chunks(chunk_paths, progress=progress)
 
         return result
