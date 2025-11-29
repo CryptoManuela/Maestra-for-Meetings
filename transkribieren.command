@@ -14,15 +14,18 @@ echo ""
 # Wechsle ins Skript-Verzeichnis
 cd "$(dirname "$0")"
 
-# Aktiviere virtuelle Umgebung
-source venv/bin/activate 2>/dev/null
-
-if [ $? -ne 0 ]; then
-    echo "❌ Fehler: Bitte führe zuerst setup_mac.command aus!"
+# Prüfe ob Setup schon lief
+if [ ! -d "venv" ]; then
+    echo "❌ Fehler: Setup wurde noch nicht ausgeführt!"
+    echo ""
+    echo "   Bitte führe zuerst setup_mac.command aus."
     echo ""
     read -p "Drücke Enter zum Beenden..."
     exit 1
 fi
+
+# Aktiviere virtuelle Umgebung
+source venv/bin/activate
 
 # Frage nach Audio-Datei
 echo "🎵 Welche Audio-Datei möchtest du transkribieren?"
