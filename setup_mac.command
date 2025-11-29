@@ -36,15 +36,35 @@ echo "📚 Installiere Python-Pakete..."
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# Erstelle .env falls nicht vorhanden
-if [ ! -f .env ]; then
-    echo ""
-    echo "⚠️  WICHTIG: API Keys werden benötigt!"
-    echo ""
-    cp .env.example .env
-    echo "Bitte öffne die Datei .env und trage deine API Keys ein."
-fi
+# API Keys abfragen
+echo ""
+echo "============================================"
+echo "🔑 API KEYS EINRICHTEN"
+echo "============================================"
+echo ""
+echo "Du brauchst zwei API Keys:"
+echo "1. OpenAI API Key (für Transkription)"
+echo "2. Google API Key (für Zusammenfassung)"
+echo ""
 
+read -p "OpenAI API Key eingeben: " OPENAI_KEY
+read -p "Google API Key eingeben: " GOOGLE_KEY
+
+# .env Datei erstellen
+cat > .env << EOF
+# OpenAI API Key für Whisper Transkription
+OPENAI_API_KEY=$OPENAI_KEY
+
+# Google Gemini API Key für Meeting-Zusammenfassungen
+GOOGLE_API_KEY=$GOOGLE_KEY
+
+# Audio Chunk Einstellungen
+MAX_CHUNK_SIZE_MB=24
+CHUNK_OVERLAP_SECONDS=2
+EOF
+
+echo ""
+echo "✅ API Keys gespeichert!"
 echo ""
 echo "✅ Installation abgeschlossen!"
 echo ""
@@ -52,12 +72,7 @@ echo "============================================"
 echo "SO VERWENDEST DU MAESTRA:"
 echo "============================================"
 echo ""
-echo "1. Öffne Terminal"
-echo "2. Ziehe 'transkribieren.command' ins Terminal"
-echo "3. Ziehe deine Audio-Datei ins Terminal"
-echo "4. Drücke Enter"
-echo ""
-echo "Oder doppelklicke auf 'transkribieren.command'"
+echo "Doppelklicke auf 'transkribieren.command'"
 echo "und folge den Anweisungen."
 echo ""
 
